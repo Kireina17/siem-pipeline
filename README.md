@@ -1,56 +1,65 @@
 # 🚀 SIEM Pipeline
 
-Custom lightweight SIEM pipeline integrating:
+Production-ready lightweight SIEM ingestion pipeline.
 
-- Apache Kafka (KRaft mode)
-- Wazuh Indexer
-- Python Producer (Wazuh → Kafka)
-- Python Backend Consumer (Kafka → Backend)
+Integrates:
+
+- Wazuh Indexer (TLS secured)
+- Apache Kafka (KRaft mode, 3 partitions)
+- Python Producer (timestamp-based filtering)
+- Python Backend Consumer (manual offset commit)
+- PostgreSQL (persistent storage)
+- Redis (real-time cache layer)
 
 ---
 
 # 🎯 Purpose
 
-This project streams Wazuh alerts into Kafka and processes them using a custom backend consumer.
+This project streams Wazuh alerts into Kafka and processes them into a persistent database with real-time cache support.
 
 It ensures:
 
 - Real-time alert streaming
-- Timestamp-based offset control
-- No duplicate log ingestion
-- Lightweight architecture (no heavy SIEM stack)
+- Duplicate-safe ingestion
+- Manual offset control
+- Restart-safe architecture
+- Persistent storage
+- Cache layer for dashboards
 
 ---
 
 # 🏗 Architecture
 
-Wazuh Indexer  
-⬇  
-Python Producer (polling + timestamp offset)  
-⬇  
-Kafka Topic (`wazuh-alerts`)  
-⬇  
-Python Backend Consumer  
+```
+Wazuh Indexer (HTTPS + TLS CA)
+        ↓
+wazuh_producer.py (systemd service)
+        ↓
+Kafka (topic: wazuh-alerts, 3 partitions)
+        ↓
+backend_consumer.py (systemd service)
+        ↓
+PostgreSQL (persistent storage)
+        ↓
+Redis (realtime cache layer)
+```
 
 ---
 
-# ⚡ Quick Start (Minimal Setup)
+# 🛡 Reliability & Safety
 
-```bash
-sudo apt update
-sudo apt install -y python3 python3-venv git wget curl
-git clone https://github.com/Kireina17/siem-pipeline.git
-cd siem-pipeline
-python3 -m venv siem-env
-source siem-env/bin/activate
-pip install -r requirements.txt
-```
+This pipeline guarantees:
 
-Then:
+- TLS verification (no `verify=False`)
+- Timestamp-based producer filtering
+- Manual Kafka offset commit
+- PostgreSQL `UNIQUE(event_id)` protection
+- Safe restart of all services
+- No duplicate ingestion
+- No data loss after crash
+- Redis real-time metrics support
 
-1. Install Kafka  
-2. Configure `.env`  
-3. Start Producer & Consumer  
+Designed for stable long-running production environments.
 
 ---
 
@@ -58,69 +67,132 @@ Then:
 
 - Ubuntu 22.04 / 24.04
 - Python 3.10+
-- Git
-- Internet access
+- Apache Kafka (KRaft mode)
+- PostgreSQL
+- Redis
 - Wazuh already installed
 
 ---
 
-# 🧱 1️⃣ Install Kafka (KRaft Mode)
+# ⚡ Quick Setup Summary
 
-Download Kafka:
+Install dependencies:
 
 ```bash
-wget https://downloads.apache.org/kafka/3.7.0/kafka_2.13-3.7.0.tgz
-tar -xzf kafka_2.13-3.7.0.tgz
-mv kafka_2.13-3.7.0 kafka
+sudo apt update
+sudo apt install -y python3 python3-venv wget git redis-server postgresql
 ```
 
-Generate Cluster ID:
+Clone repository:
 
 ```bash
-KAFKA_CLUSTER_ID=$(kafka/bin/kafka-storage.sh random-uuid)
-kafka/bin/kafka-storage.sh format -t $KAFKA_CLUSTER_ID -c kafka/config/kraft/server.properties
+git clone https://github.com/Kireina17/siem-pipeline.git
+cd siem-pipeline
 ```
 
-Start Kafka (test mode):
+Create virtual environment:
 
 ```bash
-kafka/bin/kafka-server-start.sh kafka/config/kraft/server.properties
-```
-
-Verify Kafka is running:
-
-```bash
-ss -tulnp | grep 9092
+python3 -m venv siem-env
+source siem-env/bin/activate
+pip install -r requirements.txt
 ```
 
 ---
 
-# 🔐 2️⃣ Configure Environment Variables
+# 🧱 Kafka Setup (KRaft Mode)
 
-Create `.env` file:
+Download Kafka 3.8.0:
 
 ```bash
-nano .env
+wget https://downloads.apache.org/kafka/3.8.0/kafka_2.13-3.8.0.tgz
+tar -xzf kafka_2.13-3.8.0.tgz
+mv kafka_2.13-3.8.0 kafka
+cd kafka
 ```
 
-Add:
+Generate cluster ID:
+
+```bash
+bin/kafka-storage.sh random-uuid
+```
+
+Format storage:
+
+```bash
+bin/kafka-storage.sh format -t <UUID> -c config/kraft/server.properties
+```
+
+Create topic:
+
+```bash
+bin/kafka-topics.sh --create \
+--topic wazuh-alerts \
+--bootstrap-server localhost:9092 \
+--partitions 3 \
+--replication-factor 1
+```
+
+---
+
+# 🗄 PostgreSQL Setup
+
+Create database and user:
+
+```sql
+CREATE DATABASE siem;
+CREATE USER siemuser WITH PASSWORD 'StrongPassword123';
+GRANT ALL PRIVILEGES ON DATABASE siem TO siemuser;
+```
+
+Create alerts table:
+
+```sql
+CREATE TABLE alerts (
+    id SERIAL PRIMARY KEY,
+    event_id TEXT UNIQUE,
+    timestamp TIMESTAMP,
+    agent_name TEXT,
+    rule_level INT,
+    rule_description TEXT,
+    full_log TEXT
+);
+```
+
+---
+
+# 🔐 Environment Configuration
+
+Create environment file:
+
+```
+/etc/wazuh-producer.env
+```
+
+Example:
 
 ```
 WAZUH_USER=admin
 WAZUH_PASS=your_password_here
-KAFKA_BROKER=localhost:9092
-TOPIC=wazuh-alerts
-```
-
-Load variables:
-
-```bash
-export $(cat .env | xargs)
 ```
 
 ---
 
-# 📡 3️⃣ Run Producer
+# 📡 Producer
+
+The producer:
+
+- Polls Wazuh Indexer
+- Filters using:
+
+```
+@timestamp > last_timestamp
+```
+
+- Sends only new alerts to Kafka
+- Prevents duplicate streaming
+
+Run manually:
 
 ```bash
 source siem-env/bin/activate
@@ -129,7 +201,17 @@ python producer/wazuh_producer.py
 
 ---
 
-# 📥 4️⃣ Run Backend Consumer
+# 📥 Backend Consumer
+
+The consumer:
+
+- Subscribes to `wazuh-alerts`
+- Inserts into PostgreSQL
+- Uses `ON CONFLICT DO NOTHING`
+- Updates Redis cache
+- Commits Kafka offset manually
+
+Run manually:
 
 ```bash
 source siem-env/bin/activate
@@ -138,128 +220,81 @@ python consumer/backend_consumer.py
 
 ---
 
-# ⚙️ Production Mode (systemd)
-
-Copy service files:
-
-```bash
-sudo cp systemd/*.service /etc/systemd/system/
-sudo systemctl daemon-reload
-```
+# ⚙ Production Mode (systemd)
 
 Enable services:
 
 ```bash
+sudo systemctl daemon-reload
 sudo systemctl enable kafka
 sudo systemctl enable wazuh-producer
 sudo systemctl enable backend-consumer
-```
-
-Start services:
-
-```bash
 sudo systemctl start kafka
 sudo systemctl start wazuh-producer
 sudo systemctl start backend-consumer
 ```
 
-Check logs:
+Check status:
 
 ```bash
-journalctl -u wazuh-producer -f
-journalctl -u backend-consumer -f
-journalctl -u kafka -f
+systemctl status kafka wazuh-producer backend-consumer
 ```
 
 ---
 
-# ⚙️ How It Works
+# 🔍 Verification
 
-## 🔹 Producer (Wazuh → Kafka)
-
-The producer:
-
-1. Polls Wazuh Indexer via HTTPS
-2. Queries alerts sorted by `@timestamp`
-3. Applies timestamp-based filtering:
-
-   ```
-   @timestamp > last_timestamp
-   ```
-
-4. Sends only new alerts to Kafka topic `wazuh-alerts`
-5. Updates the offset dynamically
-
-This guarantees:
-
-- No duplicate ingestion
-- No re-reading historical data
-- Safe across day/month/year changes
-- Continuous streaming operation
-
----
-
-## 🔹 Consumer (Kafka → Backend)
-
-The backend consumer:
-
-1. Subscribes to `wazuh-alerts`
-2. Processes alerts in real-time
-3. Can forward alerts to:
-   - Database
-   - API
-   - Dashboard
-   - Log storage
-
-It acts as the processing layer of the SIEM pipeline.
-
----
-
-# 🛠 Restore On New Server
-
-On a fresh machine:
+Check Kafka consumer lag:
 
 ```bash
-sudo apt install python3 python3-venv git wget
-git clone https://github.com/Kireina17/siem-pipeline.git
-cd siem-pipeline
-python3 -m venv siem-env
-source siem-env/bin/activate
-pip install -r requirements.txt
+bin/kafka-consumer-groups.sh \
+--bootstrap-server localhost:9092 \
+--describe \
+--group dashboard-group
 ```
 
-Then:
+Lag must be:
 
-- Reinstall Kafka
-- Configure `.env`
-- Start services
+```
+LAG = 0
+```
 
-System restored.
+Check Redis:
+
+```bash
+redis-cli GET total_alerts
+```
+
+Check PostgreSQL:
+
+```sql
+SELECT count(*) FROM alerts;
+```
 
 ---
 
 # 📁 Project Structure
 
 ```
-producer/        → Wazuh → Kafka sender
-consumer/        → Kafka message processor
-kafka/config/    → Kafka configuration
-systemd/         → Production service files
-requirements.txt → Python dependencies
+producer/          → Wazuh → Kafka
+consumer/          → Kafka → PostgreSQL + Redis
+kafka/config/      → Kafka configuration
+systemd/           → Production service files
+requirements.txt   → Python dependencies
 ```
 
 ---
 
 # 🔒 Security Notes
 
-- Use GitHub Personal Access Token (not password)
+- Never commit passwords
 - Keep `.env` out of repository
-- Never commit credentials
-- Rotate tokens regularly
+- Use GitHub Personal Access Token
+- Rotate credentials periodically
 
 ---
 
 # 👑 Maintainer
 
 **M Dahfa Ramadhan**  
-Custom SIEM Pipeline – 2026
+Mini Production-Ready SIEM Pipeline – 2026
