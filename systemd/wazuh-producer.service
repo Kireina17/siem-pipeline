@@ -1,0 +1,14 @@
+[Unit]
+Description=Wazuh Kafka Producer
+After=network.target kafka.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/dahfa
+EnvironmentFile=/etc/wazuh-producer.env
+ExecStart=/home/dahfa/siem-env/bin/python /home/dahfa/wazuh_producer.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

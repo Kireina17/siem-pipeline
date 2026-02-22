@@ -1,0 +1,5 @@
+siem-env/
+kafka/logs/
+*.offset
+__pycache__/
+.env
