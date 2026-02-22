@@ -16,7 +16,7 @@ This project streams Wazuh alerts into Kafka and processes them using a custom b
 It ensures:
 
 - Real-time alert streaming
-- Timestamp-based offset logic
+- Timestamp-based offset control
 - No duplicate log ingestion
 - Lightweight architecture (no heavy SIEM stack)
 
@@ -127,13 +127,6 @@ source siem-env/bin/activate
 python producer/wazuh_producer.py
 ```
 
-The producer will:
-
-- Poll Wazuh Indexer
-- Filter using `@timestamp > last_timestamp`
-- Send only new alerts
-- Avoid re-reading old logs
-
 ---
 
 # 📥 4️⃣ Run Backend Consumer
@@ -145,7 +138,7 @@ python consumer/backend_consumer.py
 
 ---
 
-# ⚙️ 5️⃣ Production Mode (systemd)
+# ⚙️ Production Mode (systemd)
 
 Copy service files:
 
@@ -180,20 +173,45 @@ journalctl -u kafka -f
 
 ---
 
-# 🧠 Offset Logic Explanation
+# ⚙️ How It Works
 
-The producer uses:
+## 🔹 Producer (Wazuh → Kafka)
 
-```
-@timestamp > last_timestamp
-```
+The producer:
+
+1. Polls Wazuh Indexer via HTTPS
+2. Queries alerts sorted by `@timestamp`
+3. Applies timestamp-based filtering:
+
+   ```
+   @timestamp > last_timestamp
+   ```
+
+4. Sends only new alerts to Kafka topic `wazuh-alerts`
+5. Updates the offset dynamically
 
 This guarantees:
 
 - No duplicate ingestion
 - No re-reading historical data
 - Safe across day/month/year changes
-- Continuous operation (2026 → 2027 → etc.)
+- Continuous streaming operation
+
+---
+
+## 🔹 Consumer (Kafka → Backend)
+
+The backend consumer:
+
+1. Subscribes to `wazuh-alerts`
+2. Processes alerts in real-time
+3. Can forward alerts to:
+   - Database
+   - API
+   - Dashboard
+   - Log storage
+
+It acts as the processing layer of the SIEM pipeline.
 
 ---
 
