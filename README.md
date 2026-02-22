@@ -50,7 +50,7 @@ Redis (realtime cache layer)
 
 This pipeline guarantees:
 
-- TLS verification (no `verify=False`)
+- TLS verification (no insecure requests)
 - Timestamp-based producer filtering
 - Manual Kafka offset commit
 - PostgreSQL `UNIQUE(event_id)` protection
@@ -74,28 +74,13 @@ Designed for stable long-running production environments.
 
 ---
 
-# ⚡ Quick Setup Summary
+# ⚡ Quick Setup
 
-Install dependencies:
+## 1️⃣ Install Dependencies
 
 ```bash
 sudo apt update
 sudo apt install -y python3 python3-venv wget git redis-server postgresql
-```
-
-Clone repository:
-
-```bash
-git clone https://github.com/Kireina17/siem-pipeline.git
-cd siem-pipeline
-```
-
-Create virtual environment:
-
-```bash
-python3 -m venv siem-env
-source siem-env/bin/activate
-pip install -r requirements.txt
 ```
 
 ---
@@ -137,17 +122,19 @@ bin/kafka-topics.sh --create \
 
 # 🗄 PostgreSQL Setup
 
-Create database and user:
+```bash
+sudo systemctl enable postgresql
+sudo systemctl start postgresql
+sudo -u postgres psql
+```
 
 ```sql
 CREATE DATABASE siem;
 CREATE USER siemuser WITH PASSWORD 'StrongPassword123';
 GRANT ALL PRIVILEGES ON DATABASE siem TO siemuser;
-```
 
-Create alerts table:
+\c siem
 
-```sql
 CREATE TABLE alerts (
     id SERIAL PRIMARY KEY,
     event_id TEXT UNIQUE,
@@ -157,6 +144,52 @@ CREATE TABLE alerts (
     rule_description TEXT,
     full_log TEXT
 );
+```
+
+Exit with:
+
+```sql
+\q
+```
+
+---
+
+# 🔴 Redis Setup
+
+```bash
+sudo systemctl enable redis-server
+sudo systemctl start redis-server
+```
+
+Verify:
+
+```bash
+redis-cli ping
+```
+
+Expected output:
+
+```
+PONG
+```
+
+Redis is used for:
+
+- Realtime alert counter
+- Last 50 alerts cache
+- Fast dashboard metrics
+
+---
+
+# 🐍 Python Environment Setup
+
+```bash
+git clone https://github.com/Kireina17/siem-pipeline.git
+cd siem-pipeline
+
+python3 -m venv siem-env
+source siem-env/bin/activate
+pip install -r requirements.txt
 ```
 
 ---
@@ -178,73 +211,105 @@ WAZUH_PASS=your_password_here
 
 ---
 
-# 📡 Producer
+# 🔐 Wazuh TLS Certificate Configuration
 
-The producer:
+The producer connects to Wazuh Indexer using HTTPS with TLS verification.
 
-- Polls Wazuh Indexer
-- Filters using:
+Default certificate path (Wazuh 4.x):
 
 ```
-@timestamp > last_timestamp
+/etc/wazuh-indexer/certs/root-ca.pem
 ```
 
-- Sends only new alerts to Kafka
-- Prevents duplicate streaming
+Inside:
 
-Run manually:
+```
+producer/wazuh_producer.py
+```
+
+Ensure this line matches your environment:
+
+```python
+WAZUH_CA_CERT = "/etc/wazuh-indexer/certs/root-ca.pem"
+```
+
+If your certificate path differs, update it accordingly.
+
+To locate the CA certificate:
+
+```bash
+sudo find /etc -name "*root-ca*.pem"
+```
+
+⚠ Never use `verify=False`. Always validate TLS certificates in production.
+
+If misconfigured, you may see:
+
+```
+SSL: CERTIFICATE_VERIFY_FAILED
+```
+
+---
+
+# 📡 Run Producer
 
 ```bash
 source siem-env/bin/activate
 python producer/wazuh_producer.py
 ```
 
+Producer:
+
+- Polls Wazuh Indexer
+- Filters using `@timestamp > last_timestamp`
+- Sends only new alerts
+- Prevents duplicate streaming
+
 ---
 
-# 📥 Backend Consumer
-
-The consumer:
-
-- Subscribes to `wazuh-alerts`
-- Inserts into PostgreSQL
-- Uses `ON CONFLICT DO NOTHING`
-- Updates Redis cache
-- Commits Kafka offset manually
-
-Run manually:
+# 📥 Run Backend Consumer
 
 ```bash
 source siem-env/bin/activate
 python consumer/backend_consumer.py
 ```
 
+Consumer:
+
+- Subscribes to Kafka
+- Inserts into PostgreSQL
+- Uses `ON CONFLICT DO NOTHING`
+- Updates Redis cache
+- Commits Kafka offset manually
+
 ---
 
 # ⚙ Production Mode (systemd)
 
-Enable services:
-
 ```bash
+sudo cp systemd/*.service /etc/systemd/system/
 sudo systemctl daemon-reload
+
 sudo systemctl enable kafka
 sudo systemctl enable wazuh-producer
 sudo systemctl enable backend-consumer
+
 sudo systemctl start kafka
 sudo systemctl start wazuh-producer
 sudo systemctl start backend-consumer
-```
-
-Check status:
-
-```bash
-systemctl status kafka wazuh-producer backend-consumer
 ```
 
 ---
 
 # 🔍 Verification
 
-Check Kafka consumer lag:
+Check services:
+
+```bash
+systemctl status kafka wazuh-producer backend-consumer
+```
+
+Check Kafka lag:
 
 ```bash
 bin/kafka-consumer-groups.sh \
@@ -253,7 +318,7 @@ bin/kafka-consumer-groups.sh \
 --group dashboard-group
 ```
 
-Lag must be:
+Lag should be:
 
 ```
 LAG = 0
@@ -296,5 +361,5 @@ requirements.txt   → Python dependencies
 
 # 👑 Maintainer
 
-**M Dahfa Ramadhan**  
+M Dahfa Ramadhan  
 Mini Production-Ready SIEM Pipeline – 2026
