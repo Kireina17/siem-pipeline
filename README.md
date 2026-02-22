@@ -1,4 +1,4 @@
-#  SIEM Pipeline #
+# 🚀 SIEM Pipeline
 
 Custom lightweight SIEM pipeline integrating:
 
@@ -9,15 +9,48 @@ Custom lightweight SIEM pipeline integrating:
 
 ---
 
-# Architecture
+# 🎯 Purpose
+
+This project streams Wazuh alerts into Kafka and processes them using a custom backend consumer.
+
+It ensures:
+
+- Real-time alert streaming
+- Timestamp-based offset logic
+- No duplicate log ingestion
+- Lightweight architecture (no heavy SIEM stack)
+
+---
+
+# 🏗 Architecture
 
 Wazuh Indexer  
 ⬇  
-Python Producer (polling with timestamp offset)  
+Python Producer (polling + timestamp offset)  
 ⬇  
-Kafka Topic (wazuh-alerts)  
+Kafka Topic (`wazuh-alerts`)  
 ⬇  
 Python Backend Consumer  
+
+---
+
+# ⚡ Quick Start (Minimal Setup)
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv git wget curl
+git clone https://github.com/Kireina17/siem-pipeline.git
+cd siem-pipeline
+python3 -m venv siem-env
+source siem-env/bin/activate
+pip install -r requirements.txt
+```
+
+Then:
+
+1. Install Kafka  
+2. Configure `.env`  
+3. Start Producer & Consumer  
 
 ---
 
@@ -31,16 +64,7 @@ Python Backend Consumer
 
 ---
 
-# 🧰 1️⃣ Install Dependencies
-
-```bash
-sudo apt update
-sudo apt install -y python3 python3-venv git wget curl
-```
-
----
-
-# 🧱 2️⃣ Install Kafka (KRaft Mode)
+# 🧱 1️⃣ Install Kafka (KRaft Mode)
 
 Download Kafka:
 
@@ -57,13 +81,13 @@ KAFKA_CLUSTER_ID=$(kafka/bin/kafka-storage.sh random-uuid)
 kafka/bin/kafka-storage.sh format -t $KAFKA_CLUSTER_ID -c kafka/config/kraft/server.properties
 ```
 
-Start Kafka manually (test mode):
+Start Kafka (test mode):
 
 ```bash
 kafka/bin/kafka-server-start.sh kafka/config/kraft/server.properties
 ```
 
-Verify:
+Verify Kafka is running:
 
 ```bash
 ss -tulnp | grep 9092
@@ -71,26 +95,7 @@ ss -tulnp | grep 9092
 
 ---
 
-# 🐍 3️⃣ Setup Python Environment
-
-Clone repository:
-
-```bash
-git clone https://github.com/Kireina17/siem-pipeline.git
-cd siem-pipeline
-```
-
-Create virtual environment:
-
-```bash
-python3 -m venv siem-env
-source siem-env/bin/activate
-pip install -r requirements.txt
-```
-
----
-
-# 🔐 4️⃣ Configure Environment Variables
+# 🔐 2️⃣ Configure Environment Variables
 
 Create `.env` file:
 
@@ -115,22 +120,23 @@ export $(cat .env | xargs)
 
 ---
 
-# 📡 5️⃣ Run Producer
+# 📡 3️⃣ Run Producer
 
 ```bash
 source siem-env/bin/activate
 python producer/wazuh_producer.py
 ```
 
-It will:
+The producer will:
+
 - Poll Wazuh Indexer
-- Use timestamp offset logic
-- Send new alerts only
+- Filter using `@timestamp > last_timestamp`
+- Send only new alerts
 - Avoid re-reading old logs
 
 ---
 
-# 📥 6️⃣ Run Backend Consumer
+# 📥 4️⃣ Run Backend Consumer
 
 ```bash
 source siem-env/bin/activate
@@ -139,7 +145,7 @@ python consumer/backend_consumer.py
 
 ---
 
-# ⚙️ 7️⃣ Production Mode (systemd)
+# ⚙️ 5️⃣ Production Mode (systemd)
 
 Copy service files:
 
@@ -176,23 +182,24 @@ journalctl -u kafka -f
 
 # 🧠 Offset Logic Explanation
 
-Producer uses:
+The producer uses:
 
 ```
 @timestamp > last_timestamp
 ```
 
-This ensures:
-- No duplicate logs
-- No re-reading old data
-- Safe across month/year change
-- Works continuously (2026 → 2027 → etc.)
+This guarantees:
+
+- No duplicate ingestion
+- No re-reading historical data
+- Safe across day/month/year changes
+- Continuous operation (2026 → 2027 → etc.)
 
 ---
 
 # 🛠 Restore On New Server
 
-On new machine:
+On a fresh machine:
 
 ```bash
 sudo apt install python3 python3-venv git wget
@@ -203,15 +210,29 @@ source siem-env/bin/activate
 pip install -r requirements.txt
 ```
 
-Reinstall Kafka  
-Set `.env`  
-Start services  
+Then:
 
-Done.
+- Reinstall Kafka
+- Configure `.env`
+- Start services
+
+System restored.
 
 ---
 
-# 🔥 Security Notes
+# 📁 Project Structure
+
+```
+producer/        → Wazuh → Kafka sender
+consumer/        → Kafka message processor
+kafka/config/    → Kafka configuration
+systemd/         → Production service files
+requirements.txt → Python dependencies
+```
+
+---
+
+# 🔒 Security Notes
 
 - Use GitHub Personal Access Token (not password)
 - Keep `.env` out of repository
@@ -222,7 +243,5 @@ Done.
 
 # 👑 Maintainer
 
-M Dahfa Ramadhan  
-SIEM Custom Pipeline – 2026  
-
----
+**M Dahfa Ramadhan**  
+Custom SIEM Pipeline – 2026
